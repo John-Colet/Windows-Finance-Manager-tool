@@ -1,0 +1,20 @@
+# Python virtual environment and bytecode
+.venv/
+__pycache__/
+*.pyc
+
+# PyInstaller build artifacts (regenerate with FinanceManager.spec)
+build/
+dist/
+
+# The offline rebuild kit is large (Python/Inno Setup installers, wheels)
+# and is kept locally only, not in version control.
+build-kit/
+
+# Keep the installer .exe in Git, but not the redundant .zip of it
+installer/installer_output/*.zip
+
+# Never commit a real database file
+*.db
+*.sqlite
+*.sqlite3
