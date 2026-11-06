@@ -12,13 +12,26 @@ from PySide6.QtWidgets import (
 )
 
 from app.models.debt import (
-    DEBT_TYPE_VALUES, DEBT_TYPES, create_debt, create_loan, delete_debt, delete_loan,
-    get_debt, get_loan, list_debt_payments, list_debts, list_loan_repayments, list_loans,
-    record_debt_payment, record_loan_repayment, total_debt_balance, total_owed_to_me,
-    update_debt, update_loan,
+    DEBT_TYPE_VALUES, DEBT_TYPES, create_debt, create_loan, debt_has_linked_payments,
+    delete_debt, delete_loan, get_debt, get_loan, list_debt_payments, list_debts,
+    list_loan_repayments, list_loans, record_debt_payment, record_loan_repayment,
+    total_debt_balance, total_owed_to_me, update_debt, update_loan,
 )
 from app.models.user import User
+from app.ui.column_picker import ColumnPickerDialog, apply_column_visibility, get_visible_columns
 from app.utils.dates import get_qt_display_format, iso_to_display
+
+DEBTS_I_OWE_COLUMNS = [
+    ("creditor", "Creditor"), ("type", "Type"), ("balance", "Balance"),
+    ("interest_rate", "Interest Rate"), ("min_payment", "Min. Payment"), ("next_due", "Next Due"),
+]
+DEBTS_I_OWE_TABLE_KEY = "debts_i_owe"
+
+LOANS_COLUMNS = [
+    ("debtor", "Debtor"), ("original_amount", "Original Amount"), ("outstanding", "Outstanding"),
+    ("status", "Status"), ("date_lent", "Date Lent"), ("due_date", "Due Date"),
+]
+LOANS_TABLE_KEY = "loans"
 
 
 def _optional_date_or_none(date_edit: QDateEdit, checkbox_checked: bool) -> Optional[str]:
@@ -282,6 +295,9 @@ class DebtsIOweTab(QWidget):
         self.delete_button.setObjectName("dangerButton")
         self.delete_button.clicked.connect(self._on_delete_clicked)
 
+        columns_button = QPushButton("Columns...")
+        columns_button.clicked.connect(self._on_columns_clicked)
+
         self.total_label = QLabel("")
 
         buttons_row = QHBoxLayout()
@@ -290,6 +306,7 @@ class DebtsIOweTab(QWidget):
         buttons_row.addWidget(self.pay_button)
         buttons_row.addWidget(self.history_button)
         buttons_row.addWidget(self.delete_button)
+        buttons_row.addWidget(columns_button)
         buttons_row.addStretch()
 
         layout = QVBoxLayout()
@@ -313,7 +330,17 @@ class DebtsIOweTab(QWidget):
             self.table.setItem(row, 5, QTableWidgetItem(iso_to_display(debt.due_date) if debt.due_date else ""))
             self.table.item(row, 0).setData(1000, debt.debt_id)
         self.total_label.setText(f"Total debt remaining: {total_debt_balance():.2f}")
+        self._apply_column_visibility()
         self._update_button_states()
+
+    def _apply_column_visibility(self) -> None:
+        visible = get_visible_columns(DEBTS_I_OWE_TABLE_KEY, DEBTS_I_OWE_COLUMNS)
+        apply_column_visibility(self.table, DEBTS_I_OWE_COLUMNS, visible)
+
+    def _on_columns_clicked(self) -> None:
+        dialog = ColumnPickerDialog(self, DEBTS_I_OWE_TABLE_KEY, DEBTS_I_OWE_COLUMNS)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._apply_column_visibility()
 
     def _selected_debt_id(self) -> Optional[int]:
         selected = self.table.selectedItems()
@@ -367,6 +394,14 @@ class DebtsIOweTab(QWidget):
         debt_id = self._selected_debt_id()
         if debt_id is None:
             return
+        if debt_has_linked_payments(debt_id):
+            QMessageBox.warning(
+                self, "Debt is linked",
+                "One or more expenses or bill payments are linked to pay down or charge to this debt. "
+                "Unlink them first (edit that expense or bill payment and remove the debt link) "
+                "before deleting this debt.",
+            )
+            return
         confirm = QMessageBox.question(
             self, "Confirm delete", "Delete this debt and its payment history? This cannot be undone.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -405,6 +440,9 @@ class MoneyOwedToMeTab(QWidget):
         self.delete_button.setObjectName("dangerButton")
         self.delete_button.clicked.connect(self._on_delete_clicked)
 
+        columns_button = QPushButton("Columns...")
+        columns_button.clicked.connect(self._on_columns_clicked)
+
         self.total_label = QLabel("")
 
         buttons_row = QHBoxLayout()
@@ -413,6 +451,7 @@ class MoneyOwedToMeTab(QWidget):
         buttons_row.addWidget(self.pay_button)
         buttons_row.addWidget(self.history_button)
         buttons_row.addWidget(self.delete_button)
+        buttons_row.addWidget(columns_button)
         buttons_row.addStretch()
 
         layout = QVBoxLayout()
@@ -436,6 +475,7 @@ class MoneyOwedToMeTab(QWidget):
             self.table.setItem(row, 5, QTableWidgetItem(iso_to_display(loan.due_date) if loan.due_date else ""))
             self.table.item(row, 0).setData(1000, loan.loan_id)
         self.total_label.setText(f"Total money owed to you: {total_owed_to_me():.2f}")
+        self._apply_column_visibility()
         self._update_button_states()
 
     def _selected_loan_id(self) -> Optional[int]:
@@ -446,6 +486,15 @@ class MoneyOwedToMeTab(QWidget):
         has_selection = self._selected_loan_id() is not None
         for button in (self.edit_button, self.pay_button, self.history_button, self.delete_button):
             button.setEnabled(has_selection)
+
+    def _apply_column_visibility(self) -> None:
+        visible = get_visible_columns(LOANS_TABLE_KEY, LOANS_COLUMNS)
+        apply_column_visibility(self.table, LOANS_COLUMNS, visible)
+
+    def _on_columns_clicked(self) -> None:
+        dialog = ColumnPickerDialog(self, LOANS_TABLE_KEY, LOANS_COLUMNS)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._apply_column_visibility()
 
     def _on_add_clicked(self) -> None:
         dialog = LoanFormDialog(self)

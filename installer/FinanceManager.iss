@@ -7,7 +7,7 @@
 ; The build-kit's build_offline.bat does this for you automatically.
 
 #define MyAppName "Finance Manager"
-#define MyAppVersion "1.0"
+#define MyAppVersion "1.5"
 #define MyAppPublisher "Ireneo John II Colet"
 #define MyAppURL "https://john.colet.ca"
 #define MyAppExeName "FinanceManager.exe"

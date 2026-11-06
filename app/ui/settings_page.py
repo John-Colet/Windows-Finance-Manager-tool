@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QComboBox, QFormLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from typing import Optional
+
+from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from app.models.settings import get_setting, set_setting
+from app.models.user import User
 from app.ui.styles import apply_theme
 
 CURRENCY_OPTIONS = ["CAD $", "USD $", "EUR €", "GBP £", "AUD $"]
@@ -14,8 +17,9 @@ THEME_LABELS = {value: label for label, value in THEME_OPTIONS.items()}
 
 
 class SettingsPage(QWidget):
-    def __init__(self):
+    def __init__(self, current_user: Optional[User] = None):
         super().__init__()
+        self.current_user = current_user
 
         title = QLabel("Settings")
         title.setObjectName("sectionLabel")
@@ -38,6 +42,12 @@ class SettingsPage(QWidget):
         form.addRow("Currency:", self.currency_combo)
         form.addRow("Date format:", self.date_format_combo)
         form.addRow("Theme:", self.theme_combo)
+
+        self.self_signup_checkbox = None
+        if current_user is not None and current_user.is_admin:
+            self.self_signup_checkbox = QCheckBox("Allow \"Create Account\" on the login screen")
+            self.self_signup_checkbox.setChecked(get_setting("allow_self_signup", "1") == "1")
+            form.addRow("Account security:", self.self_signup_checkbox)
 
         self.status_label = QLabel("")
         self.status_label.setObjectName("successLabel")
@@ -63,5 +73,8 @@ class SettingsPage(QWidget):
         set_setting("date_format", date_format)
         set_setting("theme", theme_value)
         apply_theme(theme_value)
+
+        if self.self_signup_checkbox is not None:
+            set_setting("allow_self_signup", "1" if self.self_signup_checkbox.isChecked() else "0")
 
         self.status_label.setText("Settings saved.")

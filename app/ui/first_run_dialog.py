@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
-    QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+    QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
     QPushButton, QVBoxLayout,
 )
 
-from app.models.user import create_user
+from app.models.user import create_user, username_exists
 from app.utils.security import MIN_PASSWORD_LENGTH
 
 
@@ -74,4 +74,83 @@ class FirstRunDialog(QDialog):
 
         create_user(username=username, full_name=full_name, plain_password=password, role="admin")
         QMessageBox.information(self, "Account created", "Administrator account created. You can now log in.")
+        self.accept()
+
+
+class SelfSignupDialog(QDialog):
+    """Lets anyone at the login screen create their own account, without an
+    Administrator already being logged in. Defaults to Administrator, since
+    this app is for a single household rather than a shared public system;
+    you can still choose Regular User for someone else's account."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Create Account")
+        self.setMinimumWidth(400)
+        self.setModal(True)
+
+        intro = QLabel("Create your own login for Finance Manager.")
+        intro.setWordWrap(True)
+
+        self.username_input = QLineEdit()
+        self.full_name_input = QLineEdit()
+        self.password_input = QLineEdit()
+        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.confirm_input = QLineEdit()
+        self.confirm_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.role_combo = QComboBox()
+        self.role_combo.addItems(["Administrator", "Regular User"])
+
+        form = QFormLayout()
+        form.addRow("Username:", self.username_input)
+        form.addRow("Full name:", self.full_name_input)
+        form.addRow("Password:", self.password_input)
+        form.addRow("Confirm password:", self.confirm_input)
+        form.addRow("Role:", self.role_combo)
+
+        create_button = QPushButton("Create Account")
+        create_button.setObjectName("primaryButton")
+        create_button.clicked.connect(self._on_create_clicked)
+
+        buttons_row = QHBoxLayout()
+        buttons_row.addStretch()
+        buttons_row.addWidget(create_button)
+
+        layout = QVBoxLayout()
+        layout.addWidget(intro)
+        layout.addLayout(form)
+        layout.addLayout(buttons_row)
+        self.setLayout(layout)
+
+        self.created_username: str | None = None
+
+    def _on_create_clicked(self) -> None:
+        username = self.username_input.text().strip()
+        full_name = self.full_name_input.text().strip()
+        password = self.password_input.text()
+        confirm = self.confirm_input.text()
+
+        if not username or not full_name:
+            QMessageBox.warning(self, "Missing information", "Please fill in all fields.")
+            return
+
+        if username_exists(username):
+            QMessageBox.warning(self, "Username taken", "That username is already in use. Please choose another.")
+            return
+
+        if len(password) < MIN_PASSWORD_LENGTH:
+            QMessageBox.warning(
+                self, "Password too short",
+                f"Password must be at least {MIN_PASSWORD_LENGTH} characters.",
+            )
+            return
+
+        if password != confirm:
+            QMessageBox.warning(self, "Passwords don't match", "The two passwords you entered do not match.")
+            return
+
+        role = "admin" if self.role_combo.currentText() == "Administrator" else "user"
+        create_user(username=username, full_name=full_name, plain_password=password, role=role)
+        self.created_username = username
+        QMessageBox.information(self, "Account created", "Your account has been created. You can now log in.")
         self.accept()

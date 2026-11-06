@@ -17,7 +17,14 @@ from app.models.income import (
 )
 from app.models.tax_tag import list_tax_tags
 from app.models.user import User
+from app.ui.column_picker import ColumnPickerDialog, apply_column_visibility, get_visible_columns
 from app.utils.dates import get_qt_display_format, iso_to_display
+
+INCOME_COLUMNS = [
+    ("date", "Date"), ("amount", "Amount"), ("source", "Source"),
+    ("type", "Type"), ("taxable", "Taxable"), ("notes", "Notes"),
+]
+INCOME_TABLE_KEY = "income"
 
 
 class IncomeFormDialog(QDialog):
@@ -138,12 +145,16 @@ class IncomePage(QWidget):
         self.delete_button.setObjectName("dangerButton")
         self.delete_button.clicked.connect(self._on_delete_clicked)
 
+        columns_button = QPushButton("Columns...")
+        columns_button.clicked.connect(self._on_columns_clicked)
+
         self.total_label = QLabel("")
 
         buttons_row = QHBoxLayout()
         buttons_row.addWidget(add_button)
         buttons_row.addWidget(self.edit_button)
         buttons_row.addWidget(self.delete_button)
+        buttons_row.addWidget(columns_button)
         buttons_row.addStretch()
 
         layout = QVBoxLayout()
@@ -171,7 +182,17 @@ class IncomePage(QWidget):
             self.table.item(row, 0).setData(1000, income.income_id)
             total += income.amount
         self.total_label.setText(f"Total: {total:.2f}  ({len(incomes)} entrie(s))")
+        self._apply_column_visibility()
         self._update_button_states()
+
+    def _apply_column_visibility(self) -> None:
+        visible = get_visible_columns(INCOME_TABLE_KEY, INCOME_COLUMNS)
+        apply_column_visibility(self.table, INCOME_COLUMNS, visible)
+
+    def _on_columns_clicked(self) -> None:
+        dialog = ColumnPickerDialog(self, INCOME_TABLE_KEY, INCOME_COLUMNS)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._apply_column_visibility()
 
     def _selected_income_id(self) -> Optional[int]:
         selected = self.table.selectedItems()

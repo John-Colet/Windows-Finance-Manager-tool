@@ -10,8 +10,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
+from app.models.settings import get_setting
 from app.models.user import LoginResult, any_users_exist, attempt_login
-from app.ui.first_run_dialog import FirstRunDialog
+from app.ui.first_run_dialog import FirstRunDialog, SelfSignupDialog
 from app.ui.main_window import MainWindow
 
 APP_TITLE = "Finance Manager"
@@ -48,6 +49,10 @@ class LoginWindow(QWidget):
         login_button.setObjectName("primaryButton")
         login_button.clicked.connect(self._on_login_clicked)
 
+        create_account_button = QPushButton("Create Account")
+        create_account_button.clicked.connect(self._on_create_account_clicked)
+        create_account_button.setVisible(get_setting("allow_self_signup", "1") == "1")
+
         self.status_label = QLabel("")
         self.status_label.setObjectName("errorLabel")
         self.status_label.setWordWrap(True)
@@ -57,6 +62,7 @@ class LoginWindow(QWidget):
         credit_label.setObjectName("creditLabel")
 
         button_row = QHBoxLayout()
+        button_row.addWidget(create_account_button)
         button_row.addStretch()
         button_row.addWidget(login_button)
 
@@ -73,6 +79,12 @@ class LoginWindow(QWidget):
     def _maybe_show_first_run(self) -> None:
         if not any_users_exist():
             FirstRunDialog(self).exec()
+
+    def _on_create_account_clicked(self) -> None:
+        dialog = SelfSignupDialog(self)
+        if dialog.exec() == SelfSignupDialog.DialogCode.Accepted and dialog.created_username:
+            self.username_input.setText(dialog.created_username)
+            self.password_input.setFocus()
 
     def _on_login_clicked(self) -> None:
         username = self.username_input.text().strip()

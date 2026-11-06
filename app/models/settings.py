@@ -9,6 +9,7 @@ DEFAULT_SETTINGS = {
     "session_timeout_minutes": "15",
     "backup_schedule": "daily",
     "backup_retention_count": "10",
+    "allow_self_signup": "1",
 }
 
 

@@ -21,6 +21,11 @@ from app.ui.settings_page import SettingsPage
 from app.ui.taxes_page import TaxesPage
 from app.ui.users_page import UsersPage
 
+WINDOW_DEFAULT_WIDTH = 1100
+WINDOW_DEFAULT_HEIGHT = 750
+WINDOW_MIN_WIDTH = 900
+WINDOW_MIN_HEIGHT = 700
+
 APP_TITLE = "Finance Manager"
 CREDIT_LINE = "© 2026 Ireneo John II Colet — john.colet.ca"
 
@@ -36,7 +41,7 @@ class AboutDialog(QDialog):
         title = QLabel(APP_TITLE)
         title.setObjectName("titleLabel")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        version = QLabel("Version 0.9 (Phase 9 - Backup & Restore)")
+        version = QLabel("Version 1.5 (Cash & Bank Balance tracking)")
         version.setAlignment(Qt.AlignmentFlag.AlignCenter)
         credit = QLabel(CREDIT_LINE)
         credit.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -58,7 +63,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.user = user
         self.setWindowTitle(f"{APP_TITLE} - {user.full_name} ({user.role.capitalize()})")
-        self.resize(1000, 650)
+        self.resize(WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT)
+        self.setMinimumSize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
 
         self._build_ui()
         self._setup_inactivity_timer()
@@ -99,8 +105,7 @@ class MainWindow(QMainWindow):
         logout_button.setObjectName("logoutButton")
         logout_button.clicked.connect(self._on_logout_clicked)
 
-        sidebar_layout.addWidget(self.nav_list)
-        sidebar_layout.addStretch()
+        sidebar_layout.addWidget(self.nav_list, stretch=1)
         sidebar_layout.addWidget(about_button)
         sidebar_layout.addWidget(logout_button)
         sidebar.setLayout(sidebar_layout)
@@ -114,7 +119,7 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(DebtsPage(self.user))
         self.pages.addWidget(TaxesPage())
         self.pages.addWidget(ReportsPage())
-        self.pages.addWidget(SettingsPage())
+        self.pages.addWidget(SettingsPage(self.user))
         if self.user.is_admin:
             self.pages.addWidget(UsersPage(self.user))
             backup_page = BackupPage()

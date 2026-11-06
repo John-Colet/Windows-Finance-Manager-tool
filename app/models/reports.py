@@ -8,6 +8,52 @@ from datetime import date, timedelta
 from app.database.db import get_connection
 
 
+def get_cash_balance() -> float:
+    """Your running cash/bank balance: all income you've received, minus
+    everything that actually left your bank account or wallet --
+    non-credit-card expenses, bill payments, and manual debt payments --
+    plus any loan repayments you've received back.
+
+    Credit card expenses are deliberately NOT subtracted here: charging
+    something to a card doesn't take cash out of your pocket today, it
+    increases what you owe on that card instead (see the Debts page).
+    """
+    conn = get_connection()
+
+    total_income = conn.execute(
+        "SELECT COALESCE(SUM(amount), 0) AS total FROM income"
+    ).fetchone()["total"]
+
+    total_non_credit_expenses = conn.execute(
+        "SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE payment_method != 'Credit Card'"
+    ).fetchone()["total"]
+
+    total_bill_payments = conn.execute(
+        "SELECT COALESCE(SUM(amount_paid), 0) AS total FROM bill_payments"
+    ).fetchone()["total"]
+
+    # Only count MANUAL debt payments here (recorded directly on the Debts
+    # page) -- payments made via a bill or an expense are already counted
+    # above, in bill_payments / non-credit expenses, so counting them again
+    # here would subtract that cash twice.
+    total_manual_debt_payments = conn.execute(
+        "SELECT COALESCE(SUM(amount), 0) AS total FROM debt_payments "
+        "WHERE transaction_type = 'payment' AND (source_type IS NULL OR source_type = 'manual')"
+    ).fetchone()["total"]
+
+    total_loan_repayments_received = conn.execute(
+        "SELECT COALESCE(SUM(amount), 0) AS total FROM loan_repayments"
+    ).fetchone()["total"]
+
+    return (
+        total_income
+        - total_non_credit_expenses
+        - total_bill_payments
+        - total_manual_debt_payments
+        + total_loan_repayments_received
+    )
+
+
 def get_available_years() -> list[int]:
     conn = get_connection()
     rows = conn.execute(
@@ -124,6 +170,18 @@ def get_summary(start_date: str, end_date: str) -> dict:
         "net_savings": total_income - total_expenses,
         "expenses_by_category": [dict(row) for row in expenses_by_category],
     }
+
+
+def get_cumulative_savings_trend(months_back: int = 6) -> list[dict]:
+    """A simplified 'net worth direction' trend: the running total of each
+    month's net savings (income minus expenses), not a full net worth
+    figure (this app doesn't track investments or asset values)."""
+    running_total = 0.0
+    results = []
+    for row in get_monthly_trend(months_back):
+        running_total += row["income"] - row["expense"]
+        results.append({"label": row["label"], "cumulative": running_total})
+    return results
 
 
 def get_monthly_trend(months_back: int = 6) -> list[dict]:

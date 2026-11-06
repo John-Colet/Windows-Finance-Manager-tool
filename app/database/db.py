@@ -8,9 +8,10 @@ data -- it only adds whatever is missing.
 import sqlite3
 from contextlib import contextmanager
 
+from app.database.migrations import CURRENT_SCHEMA_VERSION, run_migrations
 from app.utils.paths import get_database_path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = CURRENT_SCHEMA_VERSION
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -60,6 +61,7 @@ CREATE TABLE IF NOT EXISTS tax_tags (
 CREATE TABLE IF NOT EXISTS expenses (
     expense_id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES users(user_id),
+    name TEXT NOT NULL DEFAULT '',
     date TEXT NOT NULL,
     amount REAL NOT NULL,
     category_id INTEGER NOT NULL REFERENCES categories(category_id),
@@ -68,6 +70,8 @@ CREATE TABLE IF NOT EXISTS expenses (
     receipt_image BLOB,
     receipt_filename TEXT,
     tax_tag_id INTEGER REFERENCES tax_tags(tax_tag_id),
+    linked_debt_id INTEGER REFERENCES debts_i_owe(debt_id),
+    charged_debt_id INTEGER REFERENCES debts_i_owe(debt_id),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -92,6 +96,8 @@ CREATE TABLE IF NOT EXISTS bills (
     amount REAL NOT NULL,
     due_date TEXT NOT NULL,
     frequency TEXT NOT NULL CHECK (frequency IN ('weekly', 'biweekly', 'monthly', 'yearly')),
+    interval_unit TEXT NOT NULL CHECK (interval_unit IN ('days', 'weeks', 'months')) DEFAULT 'months',
+    interval_count INTEGER NOT NULL DEFAULT 1,
     status TEXT NOT NULL CHECK (status IN ('paid', 'unpaid')) DEFAULT 'unpaid',
     notes TEXT,
     created_at TEXT NOT NULL
@@ -101,7 +107,8 @@ CREATE TABLE IF NOT EXISTS bill_payments (
     payment_id INTEGER PRIMARY KEY AUTOINCREMENT,
     bill_id INTEGER NOT NULL REFERENCES bills(bill_id),
     paid_date TEXT NOT NULL,
-    amount_paid REAL NOT NULL
+    amount_paid REAL NOT NULL,
+    linked_debt_id INTEGER REFERENCES debts_i_owe(debt_id)
 );
 
 CREATE TABLE IF NOT EXISTS debts_i_owe (
@@ -121,7 +128,10 @@ CREATE TABLE IF NOT EXISTS debt_payments (
     payment_id INTEGER PRIMARY KEY AUTOINCREMENT,
     debt_id INTEGER NOT NULL REFERENCES debts_i_owe(debt_id),
     payment_date TEXT NOT NULL,
-    amount REAL NOT NULL
+    amount REAL NOT NULL,
+    source_type TEXT CHECK (source_type IN ('manual', 'bill', 'expense')),
+    source_id INTEGER,
+    transaction_type TEXT NOT NULL CHECK (transaction_type IN ('payment', 'charge')) DEFAULT 'payment'
 );
 
 CREATE TABLE IF NOT EXISTS debts_owed_to_me (
@@ -170,8 +180,9 @@ def initialize_database() -> None:
     row = conn.execute("SELECT version FROM schema_version").fetchone()
     if row is None:
         conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
-
     conn.commit()
+
+    run_migrations(conn)
 
 
 @contextmanager

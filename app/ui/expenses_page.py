@@ -1,4 +1,13 @@
-"""Daily expenses: add/edit/delete, categories, receipts, tax tags."""
+"""Daily expenses: add/edit/delete, categories, receipts, tax tags.
+
+An expense can optionally affect a debt in one of two directions:
+  - "Charge to credit card" INCREASES a credit-card debt's balance (you
+    just spent money you now owe on that card). Only shown when the
+    payment method is Credit Card.
+  - "This pays down a debt" DECREASES any debt's balance (this expense
+    IS a payment toward it, e.g. you wrote a cheque to pay off a loan).
+These two are mutually exclusive for a single expense.
+"""
 
 from __future__ import annotations
 
@@ -18,15 +27,40 @@ from app.models.category import (
     category_in_use, category_name_exists, create_category, delete_category,
     list_categories, rename_category,
 )
+from app.models.debt import list_debts
 from app.models.expense import (
     PAYMENT_METHODS, create_expense, delete_expense, get_receipt_image,
     list_expenses, update_expense,
 )
 from app.models.tax_tag import list_tax_tags
 from app.models.user import User
+from app.ui.column_picker import ColumnPickerDialog, apply_column_visibility, get_visible_columns
 from app.utils.dates import get_qt_display_format, iso_to_display, today_iso
 
 MAX_RECEIPT_SIZE_BYTES = 8 * 1024 * 1024  # 8 MB, generous for a phone photo
+
+EXPENSE_COLUMNS = [
+    ("name", "Name"),
+    ("date", "Date"),
+    ("amount", "Amount"),
+    ("category", "Category"),
+    ("payment_method", "Payment Method"),
+    ("tax_tag", "Tax Tag"),
+    ("charged_debt", "Charged To"),
+    ("linked_debt", "Paid Down Debt"),
+    ("notes", "Notes"),
+]
+EXPENSES_TABLE_KEY = "expenses"
+
+
+def _debt_options(credit_card_only: bool = False) -> list[tuple[str, Optional[int]]]:
+    label = "(Not charged to a card)" if credit_card_only else "(Not linked to a debt)"
+    options: list[tuple[str, Optional[int]]] = [(label, None)]
+    for debt in list_debts():
+        if credit_card_only and debt.debt_type != "credit_card":
+            continue
+        options.append((f"{debt.creditor_name} (balance {debt.balance:.2f})", debt.debt_id))
+    return options
 
 
 class CategoryManagerDialog(QDialog):
@@ -146,6 +180,9 @@ class ExpenseFormDialog(QDialog):
         self.new_receipt_filename: Optional[str] = None
         self.remove_receipt_flag = False
 
+        self.name_input = QLineEdit()
+        self.name_input.setPlaceholderText("e.g. Walmart, Shell Gas Station")
+
         self.date_edit = QDateEdit()
         self.date_edit.setCalendarPopup(True)
         self.date_edit.setDisplayFormat(get_qt_display_format())
@@ -162,6 +199,7 @@ class ExpenseFormDialog(QDialog):
 
         self.payment_combo = QComboBox()
         self.payment_combo.addItems(PAYMENT_METHODS)
+        self.payment_combo.currentTextChanged.connect(self._on_payment_method_changed)
 
         self.tax_tag_combo = QComboBox()
         self.tax_tag_combo.addItem("(None)")
@@ -169,6 +207,19 @@ class ExpenseFormDialog(QDialog):
         for tag in list_tax_tags():
             self.tax_tag_combo.addItem(tag["name"])
             self._tax_tag_ids.append(tag["tax_tag_id"])
+
+        self.charge_debt_combo = QComboBox()
+        self._charge_debt_options = _debt_options(credit_card_only=True)
+        for label, _debt_id in self._charge_debt_options:
+            self.charge_debt_combo.addItem(label)
+        self.charge_debt_combo.currentIndexChanged.connect(self._on_charge_debt_changed)
+        self.charge_debt_row_label = QLabel("Charge to credit card:")
+
+        self.debt_combo = QComboBox()
+        self._debt_options = _debt_options()
+        for label, _debt_id in self._debt_options:
+            self.debt_combo.addItem(label)
+        self.debt_combo.currentIndexChanged.connect(self._on_pay_down_debt_changed)
 
         self.notes_input = QTextEdit()
         self.notes_input.setFixedHeight(60)
@@ -184,16 +235,20 @@ class ExpenseFormDialog(QDialog):
         receipt_row.addWidget(self.remove_receipt_button)
 
         form = QFormLayout()
+        form.addRow("Name:", self.name_input)
         form.addRow("Date:", self.date_edit)
         form.addRow("Amount:", self.amount_input)
         form.addRow("Category:", self.category_combo)
         form.addRow("Payment method:", self.payment_combo)
         form.addRow("Tax tag:", self.tax_tag_combo)
+        form.addRow(self.charge_debt_row_label, self.charge_debt_combo)
+        form.addRow("This pays down a debt:", self.debt_combo)
         form.addRow("Notes:", self.notes_input)
         form.addRow("Receipt:", self.receipt_status_label)
         form.addRow("", receipt_row)
 
         if existing_expense is not None:
+            self.name_input.setText(existing_expense.name)
             self.date_edit.setDate(QDate.fromString(existing_expense.date, "yyyy-MM-dd"))
             self.amount_input.setText(f"{existing_expense.amount:.2f}")
             if existing_expense.category_id in self._category_ids:
@@ -202,9 +257,17 @@ class ExpenseFormDialog(QDialog):
                 self.payment_combo.setCurrentText(existing_expense.payment_method)
             if existing_expense.tax_tag_id in self._tax_tag_ids:
                 self.tax_tag_combo.setCurrentIndex(self._tax_tag_ids.index(existing_expense.tax_tag_id))
+            charge_debt_ids = [debt_id for _label, debt_id in self._charge_debt_options]
+            if existing_expense.charged_debt_id in charge_debt_ids:
+                self.charge_debt_combo.setCurrentIndex(charge_debt_ids.index(existing_expense.charged_debt_id))
+            debt_ids = [debt_id for _label, debt_id in self._debt_options]
+            if existing_expense.linked_debt_id in debt_ids:
+                self.debt_combo.setCurrentIndex(debt_ids.index(existing_expense.linked_debt_id))
             self.notes_input.setPlainText(existing_expense.notes)
             if existing_expense.has_receipt:
                 self.receipt_status_label.setText(f"Attached: {existing_expense.receipt_filename or 'receipt'}")
+
+        self._update_charge_row_visibility()
 
         save_button = QPushButton("Save")
         save_button.setObjectName("primaryButton")
@@ -218,6 +281,24 @@ class ExpenseFormDialog(QDialog):
         layout.addLayout(form)
         layout.addLayout(buttons_row)
         self.setLayout(layout)
+
+    def _update_charge_row_visibility(self) -> None:
+        is_credit_card = self.payment_combo.currentText() == "Credit Card"
+        self.charge_debt_row_label.setVisible(is_credit_card)
+        self.charge_debt_combo.setVisible(is_credit_card)
+        if not is_credit_card:
+            self.charge_debt_combo.setCurrentIndex(0)
+
+    def _on_payment_method_changed(self, _text: str) -> None:
+        self._update_charge_row_visibility()
+
+    def _on_charge_debt_changed(self, index: int) -> None:
+        if index != 0:
+            self.debt_combo.setCurrentIndex(0)
+
+    def _on_pay_down_debt_changed(self, index: int) -> None:
+        if index != 0:
+            self.charge_debt_combo.setCurrentIndex(0)
 
     def _on_attach_receipt(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(
@@ -255,11 +336,14 @@ class ExpenseFormDialog(QDialog):
             QMessageBox.warning(self, "No categories", "Please add at least one category first.")
             return
 
+        self.result_name = self.name_input.text().strip()
         self.result_date = self.date_edit.date().toString("yyyy-MM-dd")
         self.result_amount = amount
         self.result_category_id = self._category_ids[self.category_combo.currentIndex()]
         self.result_payment_method = self.payment_combo.currentText()
         self.result_tax_tag_id = self._tax_tag_ids[self.tax_tag_combo.currentIndex()]
+        self.result_charged_debt_id = self._charge_debt_options[self.charge_debt_combo.currentIndex()][1]
+        self.result_linked_debt_id = self._debt_options[self.debt_combo.currentIndex()][1]
         self.result_notes = self.notes_input.toPlainText().strip()
         self.accept()
 
@@ -272,8 +356,8 @@ class ExpensesPage(QWidget):
         title = QLabel("Expenses")
         title.setObjectName("sectionLabel")
 
-        self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(["Date", "Amount", "Category", "Payment Method", "Tax Tag", "Notes"])
+        self.table = QTableWidget(0, len(EXPENSE_COLUMNS))
+        self.table.setHorizontalHeaderLabels([label for _key, label in EXPENSE_COLUMNS])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
@@ -297,6 +381,9 @@ class ExpensesPage(QWidget):
         manage_categories_button = QPushButton("Manage Categories")
         manage_categories_button.clicked.connect(self._on_manage_categories_clicked)
 
+        columns_button = QPushButton("Columns...")
+        columns_button.clicked.connect(self._on_columns_clicked)
+
         self.total_label = QLabel("")
 
         buttons_row = QHBoxLayout()
@@ -305,6 +392,7 @@ class ExpensesPage(QWidget):
         buttons_row.addWidget(self.view_receipt_button)
         buttons_row.addWidget(self.delete_button)
         buttons_row.addWidget(manage_categories_button)
+        buttons_row.addWidget(columns_button)
         buttons_row.addStretch()
 
         layout = QVBoxLayout()
@@ -323,16 +411,29 @@ class ExpensesPage(QWidget):
         for expense in expenses:
             row = self.table.rowCount()
             self.table.insertRow(row)
-            self.table.setItem(row, 0, QTableWidgetItem(iso_to_display(expense.date)))
-            self.table.setItem(row, 1, QTableWidgetItem(f"{expense.amount:.2f}"))
-            self.table.setItem(row, 2, QTableWidgetItem(expense.category_name))
-            self.table.setItem(row, 3, QTableWidgetItem(expense.payment_method))
-            self.table.setItem(row, 4, QTableWidgetItem(expense.tax_tag_name or ""))
-            self.table.setItem(row, 5, QTableWidgetItem(expense.notes))
+            self.table.setItem(row, 0, QTableWidgetItem(expense.name))
+            self.table.setItem(row, 1, QTableWidgetItem(iso_to_display(expense.date)))
+            self.table.setItem(row, 2, QTableWidgetItem(f"{expense.amount:.2f}"))
+            self.table.setItem(row, 3, QTableWidgetItem(expense.category_name))
+            self.table.setItem(row, 4, QTableWidgetItem(expense.payment_method))
+            self.table.setItem(row, 5, QTableWidgetItem(expense.tax_tag_name or ""))
+            self.table.setItem(row, 6, QTableWidgetItem(expense.charged_debt_name or ""))
+            self.table.setItem(row, 7, QTableWidgetItem(expense.linked_debt_name or ""))
+            self.table.setItem(row, 8, QTableWidgetItem(expense.notes))
             self.table.item(row, 0).setData(1000, expense.expense_id)
             total += expense.amount
         self.total_label.setText(f"Total: {total:.2f}  ({len(expenses)} expense(s))")
+        self._apply_column_visibility()
         self._update_button_states()
+
+    def _apply_column_visibility(self) -> None:
+        visible = get_visible_columns(EXPENSES_TABLE_KEY, EXPENSE_COLUMNS)
+        apply_column_visibility(self.table, EXPENSE_COLUMNS, visible)
+
+    def _on_columns_clicked(self) -> None:
+        dialog = ColumnPickerDialog(self, EXPENSES_TABLE_KEY, EXPENSE_COLUMNS)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._apply_column_visibility()
 
     def _selected_expense_id(self) -> Optional[int]:
         selected = self.table.selectedItems()
@@ -354,12 +455,15 @@ class ExpensesPage(QWidget):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             create_expense(
                 user_id=self.current_user.user_id,
+                name=dialog.result_name,
                 date=dialog.result_date,
                 amount=dialog.result_amount,
                 category_id=dialog.result_category_id,
                 payment_method=dialog.result_payment_method,
                 notes=dialog.result_notes,
                 tax_tag_id=dialog.result_tax_tag_id,
+                linked_debt_id=dialog.result_linked_debt_id,
+                charged_debt_id=dialog.result_charged_debt_id,
                 receipt_image=dialog.new_receipt_bytes,
                 receipt_filename=dialog.new_receipt_filename,
             )
@@ -376,12 +480,15 @@ class ExpensesPage(QWidget):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             update_expense(
                 expense_id,
+                name=dialog.result_name,
                 date=dialog.result_date,
                 amount=dialog.result_amount,
                 category_id=dialog.result_category_id,
                 payment_method=dialog.result_payment_method,
                 notes=dialog.result_notes,
                 tax_tag_id=dialog.result_tax_tag_id,
+                linked_debt_id=dialog.result_linked_debt_id,
+                charged_debt_id=dialog.result_charged_debt_id,
                 new_receipt_image=dialog.new_receipt_bytes,
                 new_receipt_filename=dialog.new_receipt_filename,
                 remove_receipt=dialog.remove_receipt_flag,

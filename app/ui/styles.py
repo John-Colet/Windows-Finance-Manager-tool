@@ -67,7 +67,7 @@ QListWidget#navList {
 }
 
 QListWidget#navList::item {
-    padding: 14px 20px;
+    padding: 10px 20px;
 }
 
 QListWidget#navList::item:selected {

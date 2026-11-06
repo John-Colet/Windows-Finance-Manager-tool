@@ -53,6 +53,27 @@ def total_debt_balance() -> float:
     return sum(debt.balance for debt in list_debts())
 
 
+def get_debt_payoff_progress() -> list[dict]:
+    """For each debt: how much has been paid so far vs. its current balance.
+    percent_paid is based on payments recorded in this app, not a stored
+    original balance (which this app doesn't separately track)."""
+    conn = get_connection()
+    results = []
+    for debt in list_debts():
+        total_paid_row = conn.execute(
+            "SELECT COALESCE(SUM(amount), 0) AS total FROM debt_payments "
+            "WHERE debt_id = ? AND transaction_type = 'payment'", (debt.debt_id,)
+        ).fetchone()
+        total_paid = total_paid_row["total"]
+        denominator = debt.balance + total_paid
+        percent_paid = (total_paid / denominator * 100) if denominator > 0 else 0.0
+        results.append({
+            "creditor_name": debt.creditor_name, "balance": debt.balance,
+            "total_paid": total_paid, "percent_paid": percent_paid,
+        })
+    return results
+
+
 def create_debt(
     user_id: int, creditor_name: str, debt_type: str, balance: float,
     interest_rate: Optional[float], minimum_payment: Optional[float],
@@ -90,6 +111,18 @@ def update_debt(
     conn.commit()
 
 
+def debt_has_linked_payments(debt_id: int) -> bool:
+    """True if any Expense or Bill payment is linked to this debt (either
+    paying it down or charging to it)."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT 1 FROM expenses WHERE linked_debt_id = ? OR charged_debt_id = ? "
+        "UNION SELECT 1 FROM bill_payments WHERE linked_debt_id = ? LIMIT 1",
+        (debt_id, debt_id, debt_id),
+    ).fetchone()
+    return row is not None
+
+
 def delete_debt(debt_id: int) -> None:
     conn = get_connection()
     conn.execute("DELETE FROM debt_payments WHERE debt_id = ?", (debt_id,))
@@ -104,15 +137,62 @@ def list_debt_payments(debt_id: int):
     ).fetchall()
 
 
-def record_debt_payment(debt_id: int, payment_date: str, amount: float) -> None:
+def record_debt_payment(
+    debt_id: int, payment_date: str, amount: float,
+    source_type: str = "manual", source_id: Optional[int] = None,
+    transaction_type: str = "payment",
+) -> int:
+    """Records a payment or a charge against a debt, and adjusts its balance.
+
+    transaction_type 'payment' REDUCES the balance (you paid some of it off).
+    transaction_type 'charge' INCREASES the balance (you charged a new
+    expense to it, e.g. a credit card purchase).
+
+    source_type/source_id remember where this came from ('manual', 'bill',
+    or 'expense'), so editing or deleting that bill/expense later can
+    correctly reverse this exact entry.
+    """
     conn = get_connection()
-    conn.execute(
-        "INSERT INTO debt_payments (debt_id, payment_date, amount) VALUES (?, ?, ?)",
-        (debt_id, payment_date, amount),
+    cursor = conn.execute(
+        "INSERT INTO debt_payments (debt_id, payment_date, amount, source_type, source_id, transaction_type) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (debt_id, payment_date, amount, source_type, source_id, transaction_type),
     )
-    conn.execute(
-        "UPDATE debts_i_owe SET balance = MAX(0, balance - ?) WHERE debt_id = ?", (amount, debt_id)
-    )
+    if transaction_type == "charge":
+        conn.execute("UPDATE debts_i_owe SET balance = balance + ? WHERE debt_id = ?", (amount, debt_id))
+    else:
+        conn.execute(
+            "UPDATE debts_i_owe SET balance = MAX(0, balance - ?) WHERE debt_id = ?", (amount, debt_id)
+        )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def unlink_debt_payment(source_type: str, source_id: int) -> None:
+    """Reverses a payment/charge that was linked from a bill or expense
+    (undoes its balance effect), then removes the record. Safe to call
+    even if nothing is linked -- it simply does nothing.
+    """
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT payment_id, debt_id, amount, transaction_type FROM debt_payments "
+        "WHERE source_type = ? AND source_id = ?",
+        (source_type, source_id),
+    ).fetchone()
+    if row is None:
+        return
+    if row["transaction_type"] == "charge":
+        # Reversing a charge means taking the amount back OFF the balance.
+        conn.execute(
+            "UPDATE debts_i_owe SET balance = MAX(0, balance - ?) WHERE debt_id = ?",
+            (row["amount"], row["debt_id"]),
+        )
+    else:
+        # Reversing a payment means giving the amount back.
+        conn.execute(
+            "UPDATE debts_i_owe SET balance = balance + ? WHERE debt_id = ?", (row["amount"], row["debt_id"])
+        )
+    conn.execute("DELETE FROM debt_payments WHERE payment_id = ?", (row["payment_id"],))
     conn.commit()
 
 
